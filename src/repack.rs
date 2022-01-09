@@ -1,33 +1,32 @@
-use std::fs;
+use std::io::{Read, Seek, Write};
 
 use anyhow::{anyhow, bail, Result};
-use arrow2::array::{Array, MutableArray, MutableBooleanArray};
+use arrow2::array::Array;
 use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::parquet::read;
-use arrow2::io::parquet::read::RecordReader;
 use arrow2::io::parquet::write::Encoding;
 
+use crate::table::VarArray;
 use crate::{Kind, TableField, Writer};
 
 #[derive(Clone)]
 pub struct OutField {
-    name: String,
-    data_type: DataType,
-    nullable: bool,
+    pub name: String,
+    pub data_type: DataType,
+    pub nullable: bool,
 
-    encoding: Encoding,
+    pub encoding: Encoding,
 }
 
 // struct Transform {
 //     input: String,
 //     output: OutField,
-//     func: Box<dyn FnMut(Box<dyn Array>, Box<dyn MutableArray>) -> Result<()>>,
+//     func: Box<dyn FnMut(Box<dyn Array>, &mut Table, usize) -> Result<()>>,
 // }
 
 pub struct Split {
-    input: String,
-    output: Vec<OutField>,
-    func: Box<dyn Send + FnMut(Box<dyn Array>, &mut [Box<dyn MutableArray>]) -> Result<()>>,
+    pub output: Vec<OutField>,
+    pub func: Box<dyn Send + FnMut(Box<dyn Array>, &mut [&mut VarArray]) -> Result<()>>,
 }
 
 pub enum Action {
@@ -39,12 +38,12 @@ pub enum Action {
 }
 
 pub struct Op {
-    input: String,
-    action: Action,
+    pub input: String,
+    pub action: Action,
 }
 
 pub struct Repack {
-    ops: Vec<Op>,
+    pub ops: Vec<Op>,
 }
 
 fn find_field<'f>(schema: &'f Schema, name: &str) -> Option<(usize, &'f Field)> {
@@ -55,8 +54,11 @@ fn find_field<'f>(schema: &'f Schema, name: &str) -> Option<(usize, &'f Field)> 
         .find(|(_, f)| f.name == name)
 }
 
-pub fn transform(repack: &mut Repack) -> Result<()> {
-    let mut f = fs::File::open("1.parquet")?;
+pub fn transform<W: Write + Send + 'static>(
+    mut f: impl Read + Seek,
+    out: W,
+    repack: &mut Repack,
+) -> Result<W> {
     let metadata = read::read_metadata(&mut f)?;
     let in_schema = read::get_schema(&metadata)?;
 
@@ -78,7 +80,7 @@ pub fn transform(repack: &mut Repack) -> Result<()> {
                     },
                 ],
 
-                Action::Split(split) => split.output.iter().cloned().map(|f| Ok(f)).collect(),
+                Action::Split(split) => split.output.iter().cloned().map(Ok).collect(),
             }
         })
         .collect::<Result<Vec<OutField>>>()?;
@@ -95,7 +97,7 @@ pub fn transform(repack: &mut Repack) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let writer = Writer::new(fs::File::create("a.parquet")?, &table_schema)?;
+    let mut writer = Writer::new(out, &table_schema)?;
 
     for (rg, _rg_meta) in metadata.row_groups.iter().enumerate() {
         for op in &mut repack.ops {
@@ -110,23 +112,23 @@ pub fn transform(repack: &mut Repack) -> Result<()> {
                 Action::Drop => unimplemented!("drop"),
                 Action::Copy => unimplemented!("copy"),
                 Action::Split(s) => {
-                    let mut arrs = s
+                    let fields: Vec<usize> = s
                         .output
                         .iter()
-                        .map(|f| Kind::from_arrow(&f.data_type).expect("already checked"))
-                        .map(|v| {
-                            v.array_with_capacity(
-                                usize::try_from(_rg_meta.num_rows())
-                                    .expect("TODO: this can actually fail"),
-                            )
-                            .inner
+                        .map(|f| {
+                            writer
+                                .find_field(&f.name)
+                                .expect("created based on input")
+                                .0
                         })
-                        .collect::<Vec<Box<dyn MutableArray>>>();
-                    (s.func)(arr, &mut arrs)?;
+                        .collect();
+                    (s.func)(arr, &mut writer.table().get_many(&fields))?;
                 }
             }
         }
+
+        writer.finish_row()?;
     }
 
-    unimplemented!()
+    writer.finish()
 }

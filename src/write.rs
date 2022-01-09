@@ -102,6 +102,10 @@ impl<W: Write + Send + 'static> Writer<W> {
         &mut self.table
     }
 
+    pub fn find_field(&self, name: &str) -> Option<(usize, &TableField)> {
+        self.schema.iter().enumerate().find(|(_, f)| f.name == name)
+    }
+
     pub fn finish_row(&mut self) -> Result<()> {
         self.table.finish_row()?;
 

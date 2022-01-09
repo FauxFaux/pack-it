@@ -61,7 +61,7 @@ impl VarArray {
         }
     }
 
-    fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
+    pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
         self.inner.as_mut_any().downcast_mut()
     }
 
@@ -97,6 +97,15 @@ impl Table {
 
     pub fn mem_estimate(&self) -> usize {
         self.mem_used
+    }
+
+    pub fn get_many(&mut self, items: &[usize]) -> Vec<&mut VarArray> {
+        self.builders
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| items.contains(i))
+            .map(|(_, v)| v)
+            .collect()
     }
 
     pub fn rows(&self) -> usize {
