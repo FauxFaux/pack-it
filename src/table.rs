@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use arrow2::array::{
     Array, MutableArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array, TryPush,
 };
@@ -18,7 +18,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn array_with_capacity(self, capacity: usize) -> VarArray {
+    pub fn array_with_capacity(self, capacity: usize) -> VarArray {
         match self {
             Kind::Bool => VarArray::new(MutableBooleanArray::with_capacity(capacity)),
             Kind::I32 => VarArray::new(MutablePrimitiveArray::<i32>::with_capacity(capacity)),
@@ -37,10 +37,21 @@ impl Kind {
             Kind::String => DataType::Utf8,
         }
     }
+
+    pub fn from_arrow(arrow: &DataType) -> Result<Self> {
+        Ok(match arrow {
+            DataType::Utf8 => Kind::String,
+            DataType::Boolean => Kind::Bool,
+            DataType::Int64 => Kind::I64,
+            DataType::Int32 => Kind::I32,
+            DataType::Float64 => Kind::F64,
+            other => bail!("unsupported type {:?}", other),
+        })
+    }
 }
 
-struct VarArray {
-    inner: Box<dyn MutableArray>,
+pub struct VarArray {
+    pub inner: Box<dyn MutableArray>,
 }
 
 impl VarArray {
