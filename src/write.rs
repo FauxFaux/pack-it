@@ -15,17 +15,17 @@ use log::info;
 use crate::table::{Kind, Table};
 
 #[derive(Clone)]
-pub struct Field {
-    name: String,
-    kind: Kind,
-    nullable: bool,
+pub struct TableField {
+    pub name: String,
+    pub kind: Kind,
+    pub nullable: bool,
 
-    encoding: Encoding,
+    pub encoding: Encoding,
 }
 
-impl Field {
+impl TableField {
     pub fn new(name: impl ToString, kind: Kind, nullable: bool) -> Self {
-        Field {
+        TableField {
             name: name.to_string(),
             kind,
             nullable,
@@ -36,7 +36,7 @@ impl Field {
 
 pub struct Writer<W> {
     table: Table,
-    schema: Box<[Field]>,
+    schema: Box<[TableField]>,
     thread: Option<OutThread<W>>,
 }
 
@@ -47,7 +47,7 @@ struct OutThread<W> {
 
 fn out_thread<W: Write + Send + 'static>(
     mut inner: W,
-    schema: &[Field],
+    schema: &[TableField],
     rx: Receiver<Result<RecordBatch, ArrowError>>,
 ) -> Result<JoinHandle<Result<W>>> {
     let arrow_schema = Schema::new(
@@ -86,7 +86,7 @@ fn out_thread<W: Write + Send + 'static>(
 }
 
 impl<W: Write + Send + 'static> Writer<W> {
-    pub fn new(inner: W, schema: &[Field]) -> Result<Self> {
+    pub fn new(inner: W, schema: &[TableField]) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
 
         let thread = out_thread(inner, schema, rx)?;
