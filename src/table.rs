@@ -5,36 +5,46 @@ use anyhow::{anyhow, bail, Result};
 use arrow2::array::{
     Array, MutableArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array, TryPush,
 };
-use arrow2::datatypes::DataType;
+use arrow2::datatypes::{DataType, TimeUnit};
 use arrow2::types::NativeType;
 
 #[derive(Copy, Clone)]
 pub enum Kind {
     Bool,
+    U8,
     I32,
     I64,
     F64,
     String,
+
+    // do we want multiple types here?
+    TimestampSecsZ,
 }
 
 impl Kind {
     pub fn array_with_capacity(self, capacity: usize) -> VarArray {
         match self {
             Kind::Bool => VarArray::new(MutableBooleanArray::with_capacity(capacity)),
+            Kind::U8 => VarArray::new(MutablePrimitiveArray::<u8>::with_capacity(capacity)),
             Kind::I32 => VarArray::new(MutablePrimitiveArray::<i32>::with_capacity(capacity)),
             Kind::I64 => VarArray::new(MutablePrimitiveArray::<i64>::with_capacity(capacity)),
             Kind::F64 => VarArray::new(MutablePrimitiveArray::<f64>::with_capacity(capacity)),
             Kind::String => VarArray::new(MutableUtf8Array::<i32>::with_capacity(capacity)),
+            Kind::TimestampSecsZ => {
+                VarArray::new(MutablePrimitiveArray::<i64>::with_capacity(capacity))
+            }
         }
     }
 
     pub fn to_arrow(self) -> DataType {
         match self {
             Kind::Bool => DataType::Boolean,
+            Kind::U8 => DataType::UInt8,
             Kind::I32 => DataType::Int32,
             Kind::I64 => DataType::Int64,
             Kind::F64 => DataType::Float64,
             Kind::String => DataType::Utf8,
+            Kind::TimestampSecsZ => DataType::Timestamp(TimeUnit::Second, None),
         }
     }
 
@@ -44,7 +54,9 @@ impl Kind {
             DataType::Boolean => Kind::Bool,
             DataType::Int64 => Kind::I64,
             DataType::Int32 => Kind::I32,
+            DataType::UInt8 => Kind::U8,
             DataType::Float64 => Kind::F64,
+            DataType::Timestamp(TimeUnit::Second, None) => Kind::TimestampSecsZ,
             other => bail!("unsupported type {:?}", other),
         })
     }

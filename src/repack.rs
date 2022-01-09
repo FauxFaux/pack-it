@@ -1,6 +1,6 @@
 use std::io::{Read, Seek, Write};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use arrow2::array::Array;
 use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::parquet::read;
@@ -90,12 +90,14 @@ pub fn transform<W: Write + Send + 'static>(
         .map(|v| -> Result<TableField> {
             Ok(TableField {
                 name: v.name.to_string(),
-                kind: Kind::from_arrow(&v.data_type)?,
+                kind: Kind::from_arrow(&v.data_type)
+                    .with_context(|| anyhow!("converting {:?} to a Kind", v.name))?,
                 nullable: false,
                 encoding: Encoding::Plain,
             })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()
+        .with_context(|| anyhow!("generating an internal schema for the output"))?;
 
     let mut writer = Writer::new(out, &table_schema)?;
 

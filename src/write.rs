@@ -122,8 +122,12 @@ impl<W: Write + Send + 'static> Writer<W> {
             .as_mut()
             .ok_or_else(|| anyhow!("already failed"))?;
 
-        let mem_estimate = self.table.mem_estimate();
         let rows = self.table.rows();
+        if 0 == rows {
+            return Ok(());
+        }
+
+        let mem_estimate = self.table.mem_estimate();
 
         info!(
             "submitting row group ({} rows, ~{}MB, ~{}bytes/row)",
