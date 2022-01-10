@@ -3,7 +3,7 @@ use std::io::{Read, Seek, Write};
 use anyhow::{anyhow, bail, Context, Result};
 use arrow2::array::{
     Array, BooleanArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array,
-    PrimitiveArray, Utf8Array,
+    PrimitiveArray, TryExtend, Utf8Array,
 };
 use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::parquet::read;
@@ -114,7 +114,12 @@ pub fn transform<W: Write + Send + 'static>(
     let mut writer = Writer::new(out, &table_schema)?;
 
     for (rg, rg_meta) in metadata.row_groups.iter().enumerate() {
-        info!("handling rg {}/{}", rg, metadata.row_groups.len());
+        info!(
+            "handling rg {}/{} ({} rows)",
+            rg,
+            metadata.row_groups.len(),
+            metadata.num_rows
+        );
 
         match rg_filter(rg, rg_meta) {
             LoopDecision::Include => (),
@@ -138,12 +143,16 @@ pub fn transform<W: Write + Send + 'static>(
                     let output = writer.table().get(output);
 
                     if let Some(output) = output.downcast_mut::<MutableUtf8Array<i32>>() {
-                        output.extend(
-                            arr.as_any()
-                                .downcast_ref::<Utf8Array<i32>>()
-                                .expect("input=output")
-                                .iter(),
-                        );
+                        output
+                            .try_extend(
+                                arr.as_any()
+                                    .downcast_ref::<Utf8Array<i32>>()
+                                    .expect("input=output")
+                                    .iter(),
+                            )
+                            .with_context(|| {
+                                anyhow!("copying {} rows of {:?}", metadata.num_rows, op.input)
+                            })?;
                     } else if let Some(output) = output.downcast_mut::<MutablePrimitiveArray<i64>>()
                     {
                         output.extend(
