@@ -9,6 +9,7 @@ use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::parquet::read;
 use arrow2::io::parquet::read::RowGroupMetaData;
 use arrow2::io::parquet::write::Encoding;
+use log::info;
 
 use crate::table::VarArray;
 use crate::{Kind, TableField, Writer};
@@ -113,6 +114,8 @@ pub fn transform<W: Write + Send + 'static>(
     let mut writer = Writer::new(out, &table_schema)?;
 
     for (rg, rg_meta) in metadata.row_groups.iter().enumerate() {
+        info!("handling rg {}/{}", rg, metadata.row_groups.len());
+
         match rg_filter(rg, rg_meta) {
             LoopDecision::Include => (),
             LoopDecision::Skip => continue,
