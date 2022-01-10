@@ -1,9 +1,13 @@
 use std::io::{Read, Seek, Write};
 
 use anyhow::{anyhow, bail, Context, Result};
-use arrow2::array::Array;
+use arrow2::array::{
+    Array, BooleanArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array,
+    PrimitiveArray, Utf8Array,
+};
 use arrow2::datatypes::{DataType, Field, Schema};
 use arrow2::io::parquet::read;
+use arrow2::io::parquet::read::RowGroupMetaData;
 use arrow2::io::parquet::write::Encoding;
 
 use crate::table::VarArray;
@@ -54,10 +58,17 @@ fn find_field<'f>(schema: &'f Schema, name: &str) -> Option<(usize, &'f Field)> 
         .find(|(_, f)| f.name == name)
 }
 
+pub enum LoopDecision {
+    Include,
+    Skip,
+    Break,
+}
+
 pub fn transform<W: Write + Send + 'static>(
     mut f: impl Read + Seek,
     out: W,
     repack: &mut Repack,
+    mut rg_filter: impl FnMut(usize, &RowGroupMetaData) -> LoopDecision,
 ) -> Result<W> {
     let metadata = read::read_metadata(&mut f)?;
     let in_schema = read::get_schema(&metadata)?;
@@ -101,7 +112,13 @@ pub fn transform<W: Write + Send + 'static>(
 
     let mut writer = Writer::new(out, &table_schema)?;
 
-    for (rg, _rg_meta) in metadata.row_groups.iter().enumerate() {
+    for (rg, rg_meta) in metadata.row_groups.iter().enumerate() {
+        match rg_filter(rg, rg_meta) {
+            LoopDecision::Include => (),
+            LoopDecision::Skip => continue,
+            LoopDecision::Break => break,
+        };
+
         for op in &mut repack.ops {
             let (field, field_meta) = find_field(&in_schema, &op.input)
                 .ok_or_else(|| anyhow!("looking up input field {:?}", op.input))?;
@@ -112,7 +129,60 @@ pub fn transform<W: Write + Send + 'static>(
             match &mut op.action {
                 Action::ErrorOut => bail!("asked to error out after loading {:?}", field_meta.name),
                 Action::Drop => unimplemented!("drop"),
-                Action::Copy => unimplemented!("copy"),
+                Action::Copy => {
+                    let (output, _) = writer.find_field(&op.input).expect("created above");
+
+                    let output = writer.table().get(output);
+
+                    if let Some(output) = output.downcast_mut::<MutableUtf8Array<i32>>() {
+                        output.extend(
+                            arr.as_any()
+                                .downcast_ref::<Utf8Array<i32>>()
+                                .expect("input=output")
+                                .iter(),
+                        );
+                    } else if let Some(output) = output.downcast_mut::<MutablePrimitiveArray<i64>>()
+                    {
+                        output.extend(
+                            arr.as_any()
+                                .downcast_ref::<PrimitiveArray<i64>>()
+                                .expect("input=output")
+                                .iter()
+                                .map(|v| v.map(|x| *x)),
+                        );
+                    } else if let Some(output) = output.downcast_mut::<MutablePrimitiveArray<i32>>()
+                    {
+                        output.extend(
+                            arr.as_any()
+                                .downcast_ref::<PrimitiveArray<i32>>()
+                                .expect("input=output")
+                                .iter()
+                                .map(|v| v.map(|x| *x)),
+                        );
+                    } else if let Some(output) = output.downcast_mut::<MutableBooleanArray>() {
+                        output.extend(
+                            arr.as_any()
+                                .downcast_ref::<BooleanArray>()
+                                .expect("input=output")
+                                .iter(),
+                        );
+                    } else if let Some(output) = output.downcast_mut::<MutablePrimitiveArray<f64>>()
+                    {
+                        output.extend(
+                            arr.as_any()
+                                .downcast_ref::<PrimitiveArray<f64>>()
+                                .expect("input=output")
+                                .iter()
+                                .map(|v| v.map(|x| *x)),
+                        );
+                    } else {
+                        bail!(
+                            "copy for {:?} columns ({:?})",
+                            field_meta.data_type,
+                            field_meta.name
+                        )
+                    }
+                }
                 Action::Split(s) => {
                     let fields: Vec<usize> = s
                         .output

@@ -111,6 +111,10 @@ impl Table {
         self.mem_used
     }
 
+    pub fn get(&mut self, item: usize) -> &mut VarArray {
+        &mut self.builders[item]
+    }
+
     pub fn get_many(&mut self, items: &[usize]) -> Vec<&mut VarArray> {
         self.builders
             .iter_mut()
