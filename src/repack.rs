@@ -118,7 +118,7 @@ pub fn transform<W: Write + Send + 'static>(
             "handling rg {}/{} ({} rows)",
             rg,
             metadata.row_groups.len(),
-            metadata.num_rows
+            rg_meta.num_rows()
         );
 
         match rg_filter(rg, rg_meta) {
