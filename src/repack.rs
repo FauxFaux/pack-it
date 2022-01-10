@@ -211,7 +211,8 @@ pub fn transform<W: Write + Send + 'static>(
             }
         }
 
-        writer.finish_row()?;
+        writer.table().finish_bulk_push()?;
+        writer.consider_flushing()?;
     }
 
     writer.finish()

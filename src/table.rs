@@ -1,7 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Result};
+use crate::MemUsage;
+use anyhow::{anyhow, bail, ensure, Result};
 use arrow2::array::{
     Array, MutableArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array, TryPush,
 };
@@ -73,6 +74,10 @@ impl VarArray {
         }
     }
 
+    pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+        self.inner.as_any().downcast_ref()
+    }
+
     pub fn downcast_mut<T: Any>(&mut self) -> Option<&mut T> {
         self.inner.as_mut_any().downcast_mut()
     }
@@ -80,6 +85,29 @@ impl VarArray {
     // this moves, but has to be called from a mut ref?!
     fn as_arc(&mut self) -> Arc<dyn Array> {
         self.inner.as_arc()
+    }
+}
+
+impl MemUsage for VarArray {
+    fn mem_usage(&self) -> usize {
+        // some regrets
+        if let Some(v) = self.downcast_ref::<MutableUtf8Array<i32>>() {
+            v.mem_usage()
+        } else if let Some(v) = self.downcast_ref::<MutablePrimitiveArray<i64>>() {
+            v.mem_usage()
+        } else if let Some(v) = self.downcast_ref::<MutablePrimitiveArray<i32>>() {
+            v.mem_usage()
+        } else if let Some(v) = self.downcast_ref::<MutablePrimitiveArray<i16>>() {
+            v.mem_usage()
+        } else if let Some(v) = self.downcast_ref::<MutablePrimitiveArray<u8>>() {
+            v.mem_usage()
+        } else if let Some(v) = self.downcast_ref::<MutableBooleanArray>() {
+            v.mem_usage()
+        } else {
+            debug_assert!(false, "unsupported type");
+            // just wildly overestimate
+            self.inner.len() * 16
+        }
     }
 }
 
@@ -107,6 +135,21 @@ impl Table {
         }
     }
 
+    pub fn check_consistent(&self) -> Result<()> {
+        let expectation = self.builders[0].inner.len();
+        for (i, b) in self.builders.iter().enumerate().skip(1) {
+            ensure!(
+                b.inner.len() == expectation,
+                "expected col {} to have length {}, not {}",
+                i,
+                expectation,
+                b.inner.len()
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn mem_estimate(&self) -> usize {
         self.mem_used
     }
@@ -122,6 +165,12 @@ impl Table {
             .filter(|(i, _)| items.contains(i))
             .map(|(_, v)| v)
             .collect()
+    }
+
+    pub fn finish_bulk_push(&mut self) -> Result<()> {
+        self.check_consistent()?;
+        self.mem_used = self.builders.iter().map(|b| b.mem_usage()).sum();
+        Ok(())
     }
 
     pub fn rows(&self) -> usize {
@@ -171,10 +220,6 @@ impl Table {
                 std::any::type_name::<T>()
             ))
         }
-    }
-
-    pub fn finish_row(&mut self) -> Result<()> {
-        Ok(())
     }
 
     pub fn take_batch(&mut self) -> Vec<Arc<dyn Array>> {

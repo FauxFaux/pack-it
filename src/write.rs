@@ -106,8 +106,8 @@ impl<W: Write + Send + 'static> Writer<W> {
         self.schema.iter().enumerate().find(|(_, f)| f.name == name)
     }
 
-    pub fn finish_row(&mut self) -> Result<()> {
-        self.table.finish_row()?;
+    pub fn consider_flushing(&mut self) -> Result<()> {
+        self.table.check_consistent()?;
 
         if self.table.mem_estimate() > 512 * 1024 * 1024 || self.table.rows() > 100_000 {
             self.flush()?;
@@ -127,6 +127,8 @@ impl<W: Write + Send + 'static> Writer<W> {
             return Ok(());
         }
 
+        // update the memory estimate, and check consistent
+        self.table.finish_bulk_push()?;
         let mem_estimate = self.table.mem_estimate();
 
         info!(
