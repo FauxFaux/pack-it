@@ -1,5 +1,6 @@
 #![feature(try_blocks)]
 
+mod erratum;
 mod mem;
 mod packer;
 pub mod repack;

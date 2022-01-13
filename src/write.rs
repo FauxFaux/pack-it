@@ -1,8 +1,8 @@
 use std::io::Write;
-use std::sync::mpsc::{Receiver, SendError, SyncSender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+use crate::erratum::join;
 use anyhow::{anyhow, Context, Result};
 use arrow2::array::Array;
 use arrow2::datatypes::Field as ArrowField;
@@ -12,24 +12,21 @@ use arrow2::io::parquet::write::{
     to_parquet_schema, write_file, Compression, RowGroupIterator, Version, WriteOptions,
 };
 use arrow2::record_batch::RecordBatch;
+use crossbeam_channel::{SendError, Sender};
 use log::info;
 
 use crate::table::TableField;
 
 pub struct Writer<W> {
     schema: Box<[TableField]>,
-    thread: Option<OutThread<W>>,
-}
-
-struct OutThread<W> {
-    tx: SyncSender<Result<RecordBatch, ArrowError>>,
-    thread: JoinHandle<Result<W>>,
+    thread: Vec<JoinHandle<Result<W>>>,
+    tx: Sender<Result<RecordBatch, ArrowError>>,
 }
 
 fn out_thread<W: Write + Send + 'static>(
     mut inner: W,
     schema: &[TableField],
-    rx: Receiver<Result<RecordBatch, ArrowError>>,
+    rx: impl IntoIterator<Item = Result<RecordBatch, ArrowError>> + Send + 'static,
 ) -> Result<JoinHandle<Result<W>>> {
     let arrow_schema = Schema::new(
         schema
@@ -68,13 +65,14 @@ fn out_thread<W: Write + Send + 'static>(
 
 impl<W: Write + Send + 'static> Writer<W> {
     pub fn new(inner: W, schema: &[TableField]) -> Result<Self> {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let (tx, rx) = crossbeam_channel::bounded(1);
 
         let thread = out_thread(inner, schema, rx)?;
 
         Ok(Self {
             schema: schema.to_vec().into_boxed_slice(),
-            thread: Some(OutThread { thread, tx }),
+            thread: vec![thread],
+            tx,
         })
     }
 
@@ -83,11 +81,6 @@ impl<W: Write + Send + 'static> Writer<W> {
     }
 
     pub fn submit_batch(&mut self, batch: impl IntoIterator<Item = Arc<dyn Array>>) -> Result<()> {
-        let thread = self
-            .thread
-            .as_mut()
-            .ok_or_else(|| anyhow!("already failed"))?;
-
         let result = RecordBatch::try_from_iter(
             batch
                 .into_iter()
@@ -95,32 +88,23 @@ impl<W: Write + Send + 'static> Writer<W> {
                 .map(|(arr, stat)| (stat.name.to_string(), arr)),
         );
 
-        if let Err(SendError(_)) = thread.tx.send(result) {
-            let thread = self.thread.take().expect("it was there a second ago");
-
-            // the read half is gone; this is a fused, finished consumer
-            drop(thread.tx);
-            thread
+        if let Err(SendError(_)) = self.tx.send(result) {
+            let thread = self
                 .thread
-                .join()
-                .expect("thread panic")
-                .with_context(|| anyhow!("file writer had failed"))?;
+                .pop()
+                .ok_or_else(|| anyhow!("previously failed"))?;
+
+            join(thread).with_context(|| anyhow!("file writer had failed"))?;
         }
 
         Ok(())
     }
 
     pub fn finish(mut self) -> Result<W> {
-        let thread = self
-            .thread
-            .take()
-            .ok_or_else(|| anyhow!("already failed"))?;
+        let thread = self.thread.pop().ok_or_else(|| anyhow!("already failed"))?;
 
         info!("finishing...");
-        drop(thread.tx);
-        match thread.thread.join() {
-            Ok(res) => res,
-            Err(payload) => std::panic::resume_unwind(payload),
-        }
+        drop(self.tx);
+        join(thread)
     }
 }
