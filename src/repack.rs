@@ -12,7 +12,7 @@ use arrow2::io::parquet::write::Encoding;
 use log::info;
 
 use crate::table::VarArray;
-use crate::{Kind, TableField, Writer};
+use crate::{Kind, Packer, TableField, Writer};
 
 #[derive(Clone)]
 pub struct OutField {
@@ -111,7 +111,7 @@ pub fn transform<W: Write + Send + 'static>(
         .collect::<Result<Vec<_>>>()
         .with_context(|| anyhow!("generating an internal schema for the output"))?;
 
-    let mut writer = Writer::new(out, &table_schema)?;
+    let mut writer = Packer::new(out, &table_schema)?;
 
     for (rg, rg_meta) in metadata.row_groups.iter().enumerate() {
         info!(

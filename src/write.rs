@@ -35,9 +35,13 @@ impl TableField {
 }
 
 pub struct Writer<W> {
-    table: Table,
     schema: Box<[TableField]>,
     thread: Option<OutThread<W>>,
+}
+
+pub struct Packer<W> {
+    writer: Writer<W>,
+    table: Table,
 }
 
 struct OutThread<W> {
@@ -85,16 +89,18 @@ fn out_thread<W: Write + Send + 'static>(
     }))
 }
 
-impl<W: Write + Send + 'static> Writer<W> {
+impl<W: Write + Send + 'static> Packer<W> {
     pub fn new(inner: W, schema: &[TableField]) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
 
         let thread = out_thread(inner, schema, rx)?;
 
         Ok(Self {
-            schema: schema.to_vec().into_boxed_slice(),
+            writer: Writer {
+                schema: schema.to_vec().into_boxed_slice(),
+                thread: Some(OutThread { thread, tx }),
+            },
             table: Table::with_capacity(&schema.iter().map(|f| f.kind).collect::<Vec<_>>(), 0),
-            thread: Some(OutThread { thread, tx }),
         })
     }
 
@@ -103,7 +109,11 @@ impl<W: Write + Send + 'static> Writer<W> {
     }
 
     pub fn find_field(&self, name: &str) -> Option<(usize, &TableField)> {
-        self.schema.iter().enumerate().find(|(_, f)| f.name == name)
+        self.writer
+            .schema
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name == name)
     }
 
     pub fn consider_flushing(&mut self) -> Result<()> {
@@ -118,6 +128,7 @@ impl<W: Write + Send + 'static> Writer<W> {
 
     fn flush(&mut self) -> Result<()> {
         let thread = self
+            .writer
             .thread
             .as_mut()
             .ok_or_else(|| anyhow!("already failed"))?;
@@ -142,12 +153,16 @@ impl<W: Write + Send + 'static> Writer<W> {
             self.table
                 .take_batch()
                 .into_iter()
-                .zip(self.schema.iter())
+                .zip(self.writer.schema.iter())
                 .map(|(arr, stat)| (stat.name.to_string(), arr)),
         );
 
         if let Err(SendError(_)) = thread.tx.send(result) {
-            let thread = self.thread.take().expect("it was there a second ago");
+            let thread = self
+                .writer
+                .thread
+                .take()
+                .expect("it was there a second ago");
             // the read half is gone; this is a fused, finished consumer
             drop(thread.tx);
             thread
@@ -164,6 +179,7 @@ impl<W: Write + Send + 'static> Writer<W> {
         self.flush()?;
 
         let thread = self
+            .writer
             .thread
             .take()
             .ok_or_else(|| anyhow!("already failed"))?;
