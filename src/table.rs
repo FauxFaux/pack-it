@@ -196,23 +196,23 @@ impl Table {
         }
     }
 
-    pub fn push_bool(&mut self, i: usize, val: bool) -> Result<()> {
+    pub fn push_bool(&mut self, i: usize, val: Option<bool>) -> Result<()> {
         let arr = &mut self.builders[i];
         if let Some(arr) = arr.downcast_mut::<MutableBooleanArray>() {
             // only off by a factor of about four
             self.mem_used += 1;
-            arr.try_push(Some(val))?;
+            arr.try_push(val)?;
             Ok(())
         } else {
             Err(anyhow!("can't push a bool to this column"))
         }
     }
 
-    pub fn push_primitive<T: NativeType>(&mut self, i: usize, val: T) -> Result<()> {
+    pub fn push_primitive<T: NativeType>(&mut self, i: usize, val: Option<T>) -> Result<()> {
         let arr = &mut self.builders[i];
         if let Some(arr) = arr.downcast_mut::<MutablePrimitiveArray<T>>() {
             self.mem_used += std::mem::size_of::<T>();
-            arr.try_push(Some(val))?;
+            arr.try_push(val)?;
             Ok(())
         } else {
             Err(anyhow!(
