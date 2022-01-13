@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crate::erratum::join;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use arrow2::array::Array;
 use arrow2::datatypes::Field as ArrowField;
 use arrow2::datatypes::Schema;
@@ -19,8 +19,8 @@ use crate::table::TableField;
 
 pub struct Writer<W> {
     schema: Box<[TableField]>,
-    thread: Vec<JoinHandle<Result<W>>>,
-    tx: Sender<Result<RecordBatch, ArrowError>>,
+    threads: Vec<JoinHandle<Result<W>>>,
+    tx: Option<Sender<Result<RecordBatch, ArrowError>>>,
 }
 
 fn out_thread<W: Write + Send + 'static>(
@@ -64,15 +64,23 @@ fn out_thread<W: Write + Send + 'static>(
 }
 
 impl<W: Write + Send + 'static> Writer<W> {
-    pub fn new(inner: W, schema: &[TableField]) -> Result<Self> {
-        let (tx, rx) = crossbeam_channel::bounded(1);
+    pub fn new(
+        inner: impl IntoIterator<Item = W, IntoIter = impl Iterator<Item = W> + ExactSizeIterator>,
+        schema: &[TableField],
+    ) -> Result<Self> {
+        let inner = inner.into_iter();
 
-        let thread = out_thread(inner, schema, rx)?;
+        let (tx, rx) = crossbeam_channel::bounded(inner.len());
+
+        let threads = inner
+            .into_iter()
+            .map(|inner| out_thread(inner, schema, rx.clone()))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self {
             schema: schema.to_vec().into_boxed_slice(),
-            thread: vec![thread],
-            tx,
+            threads,
+            tx: Some(tx),
         })
     }
 
@@ -88,23 +96,41 @@ impl<W: Write + Send + 'static> Writer<W> {
                 .map(|(arr, stat)| (stat.name.to_string(), arr)),
         );
 
-        if let Err(SendError(_)) = self.tx.send(result) {
-            let thread = self
-                .thread
-                .pop()
-                .ok_or_else(|| anyhow!("previously failed"))?;
+        let tx = self
+            .tx
+            .as_mut()
+            .ok_or_else(|| anyhow!("previously failed"))?;
 
-            join(thread).with_context(|| anyhow!("file writer had failed"))?;
+        if let Err(SendError(_)) = tx.send(result) {
+            // all of the writers have failed, so we need to die
+            // (this doesn't catch the case where one writer has died)
+            drop(self.tx.take());
+
+            // this should fail
+            join_all(&mut self.threads)?;
+
+            bail!("all of the threads have gone, but none have bothered to tell us why");
         }
 
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<W> {
-        let thread = self.thread.pop().ok_or_else(|| anyhow!("already failed"))?;
+    pub fn finish(mut self) -> Result<Vec<W>> {
+        if self.threads.is_empty() {
+            bail!("had previously failed");
+        }
 
         info!("finishing...");
         drop(self.tx);
-        join(thread)
+
+        join_all(&mut self.threads)
     }
+}
+
+fn join_all<T>(threads: &mut Vec<JoinHandle<Result<T>>>) -> Result<Vec<T>> {
+    let mut ret = Vec::with_capacity(threads.len());
+    while let Some(thread) = threads.pop() {
+        ret.push(join(thread)?);
+    }
+    Ok(ret)
 }

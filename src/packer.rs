@@ -13,7 +13,7 @@ pub struct Packer<W> {
 impl<W: Write + Send + 'static> Packer<W> {
     pub fn new(inner: W, schema: &[TableField]) -> Result<Self> {
         Ok(Self {
-            writer: Writer::new(inner, schema)?,
+            writer: Writer::new(vec![inner], schema)?,
             table: Table::with_capacity(&schema.iter().map(|f| f.kind).collect::<Vec<_>>(), 0),
         })
     }
@@ -62,6 +62,6 @@ impl<W: Write + Send + 'static> Packer<W> {
 
     pub fn finish(mut self) -> Result<W> {
         self.flush()?;
-        self.writer.finish()
+        Ok(self.writer.finish()?.pop().expect("exactly one"))
     }
 }
