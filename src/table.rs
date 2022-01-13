@@ -7,6 +7,7 @@ use arrow2::array::{
     Array, MutableArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array, TryPush,
 };
 use arrow2::datatypes::{DataType, TimeUnit};
+use arrow2::io::parquet::write::Encoding;
 use arrow2::types::NativeType;
 
 #[derive(Copy, Clone)]
@@ -60,6 +61,15 @@ impl Kind {
             DataType::Timestamp(TimeUnit::Second, None) => Kind::TimestampSecsZ,
             other => bail!("unsupported type {:?}", other),
         })
+    }
+
+    pub fn default_encoding(&self) -> Encoding {
+        match self {
+            Kind::TimestampSecsZ | Kind::I32 | Kind::I64 => Encoding::DeltaBinaryPacked,
+            Kind::String => Encoding::DeltaLengthByteArray,
+            Kind::F64 => Encoding::ByteStreamSplit,
+            Kind::Bool | Kind::U8 => Encoding::Plain,
+        }
     }
 }
 

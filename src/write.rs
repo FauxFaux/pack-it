@@ -1,8 +1,10 @@
 use std::io::Write;
 use std::sync::mpsc::{Receiver, SendError, SyncSender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use anyhow::{anyhow, Context, Result};
+use arrow2::array::Array;
 use arrow2::datatypes::Field as ArrowField;
 use arrow2::datatypes::Schema;
 use arrow2::error::ArrowError;
@@ -29,7 +31,7 @@ impl TableField {
             name: name.to_string(),
             kind,
             nullable,
-            encoding: Encoding::Plain,
+            encoding: kind.default_encoding(),
         }
     }
 }
@@ -89,17 +91,69 @@ fn out_thread<W: Write + Send + 'static>(
     }))
 }
 
-impl<W: Write + Send + 'static> Packer<W> {
+impl<W: Write + Send + 'static> Writer<W> {
     pub fn new(inner: W, schema: &[TableField]) -> Result<Self> {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
 
         let thread = out_thread(inner, schema, rx)?;
 
         Ok(Self {
-            writer: Writer {
-                schema: schema.to_vec().into_boxed_slice(),
-                thread: Some(OutThread { thread, tx }),
-            },
+            schema: schema.to_vec().into_boxed_slice(),
+            thread: Some(OutThread { thread, tx }),
+        })
+    }
+
+    pub fn find_field(&self, name: &str) -> Option<(usize, &TableField)> {
+        self.schema.iter().enumerate().find(|(_, f)| f.name == name)
+    }
+
+    pub fn submit_batch(&mut self, batch: impl IntoIterator<Item = Arc<dyn Array>>) -> Result<()> {
+        let thread = self
+            .thread
+            .as_mut()
+            .ok_or_else(|| anyhow!("already failed"))?;
+
+        let result = RecordBatch::try_from_iter(
+            batch
+                .into_iter()
+                .zip(self.schema.iter())
+                .map(|(arr, stat)| (stat.name.to_string(), arr)),
+        );
+
+        if let Err(SendError(_)) = thread.tx.send(result) {
+            let thread = self.thread.take().expect("it was there a second ago");
+
+            // the read half is gone; this is a fused, finished consumer
+            drop(thread.tx);
+            thread
+                .thread
+                .join()
+                .expect("thread panic")
+                .with_context(|| anyhow!("file writer had failed"))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<W> {
+        let thread = self
+            .thread
+            .take()
+            .ok_or_else(|| anyhow!("already failed"))?;
+
+        info!("finishing...");
+        drop(thread.tx);
+        match thread.thread.join() {
+            Ok(res) => res,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+}
+
+impl<W: Write + Send + 'static> Packer<W> {
+    pub fn new(inner: W, schema: &[TableField]) -> Result<Self> {
+        Ok(Self {
+            writer: Writer::new(inner, schema)?,
             table: Table::with_capacity(&schema.iter().map(|f| f.kind).collect::<Vec<_>>(), 0),
         })
     }
@@ -109,11 +163,7 @@ impl<W: Write + Send + 'static> Packer<W> {
     }
 
     pub fn find_field(&self, name: &str) -> Option<(usize, &TableField)> {
-        self.writer
-            .schema
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name == name)
+        self.writer.find_field(name)
     }
 
     pub fn consider_flushing(&mut self) -> Result<()> {
@@ -127,12 +177,6 @@ impl<W: Write + Send + 'static> Packer<W> {
     }
 
     fn flush(&mut self) -> Result<()> {
-        let thread = self
-            .writer
-            .thread
-            .as_mut()
-            .ok_or_else(|| anyhow!("already failed"))?;
-
         let rows = self.table.rows();
         if 0 == rows {
             return Ok(());
@@ -149,43 +193,15 @@ impl<W: Write + Send + 'static> Packer<W> {
             mem_estimate / rows
         );
 
-        let result = RecordBatch::try_from_iter(
-            self.table
-                .take_batch()
-                .into_iter()
-                .zip(self.writer.schema.iter())
-                .map(|(arr, stat)| (stat.name.to_string(), arr)),
-        );
+        let batch = self.table.take_batch();
 
-        if let Err(SendError(_)) = thread.tx.send(result) {
-            let thread = self
-                .writer
-                .thread
-                .take()
-                .expect("it was there a second ago");
-            // the read half is gone; this is a fused, finished consumer
-            drop(thread.tx);
-            thread
-                .thread
-                .join()
-                .expect("thread panic")
-                .with_context(|| anyhow!("file writer had failed"))?;
-        }
+        self.writer.submit_batch(batch)?;
 
         Ok(())
     }
 
     pub fn finish(mut self) -> Result<W> {
         self.flush()?;
-
-        let thread = self
-            .writer
-            .thread
-            .take()
-            .ok_or_else(|| anyhow!("already failed"))?;
-
-        info!("finishing...");
-        drop(thread.tx);
-        thread.thread.join().expect("thread panic")
+        self.writer.finish()
     }
 }

@@ -12,7 +12,7 @@ use arrow2::io::parquet::write::Encoding;
 use log::info;
 
 use crate::table::VarArray;
-use crate::{Kind, Packer, TableField, Writer};
+use crate::{Kind, Packer, TableField};
 
 #[derive(Clone)]
 pub struct OutField {
