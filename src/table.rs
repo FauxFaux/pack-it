@@ -10,6 +10,26 @@ use arrow2::datatypes::{DataType, TimeUnit};
 use arrow2::io::parquet::write::Encoding;
 use arrow2::types::NativeType;
 
+#[derive(Clone)]
+pub struct TableField {
+    pub name: String,
+    pub kind: Kind,
+    pub nullable: bool,
+
+    pub encoding: Encoding,
+}
+
+impl TableField {
+    pub fn new(name: impl ToString, kind: Kind, nullable: bool) -> Self {
+        TableField {
+            name: name.to_string(),
+            kind,
+            nullable,
+            encoding: kind.default_encoding(),
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub enum Kind {
     Bool,
