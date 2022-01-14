@@ -4,7 +4,8 @@ use std::sync::Arc;
 use crate::MemUsage;
 use anyhow::{anyhow, bail, ensure, Result};
 use arrow2::array::{
-    Array, MutableArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array, TryPush,
+    Array, MutableArray, MutableBooleanArray, MutableFixedSizeBinaryArray, MutablePrimitiveArray,
+    MutableUtf8Array, TryPush,
 };
 use arrow2::datatypes::{DataType, TimeUnit};
 use arrow2::io::parquet::write::Encoding;
@@ -33,6 +34,7 @@ impl TableField {
 #[derive(Copy, Clone)]
 pub enum Kind {
     Bool,
+    Uuid,
     U8,
     I32,
     I64,
@@ -52,6 +54,7 @@ impl Kind {
             Kind::I64 => VarArray::new(MutablePrimitiveArray::<i64>::with_capacity(capacity)),
             Kind::F64 => VarArray::new(MutablePrimitiveArray::<f64>::with_capacity(capacity)),
             Kind::String => VarArray::new(MutableUtf8Array::<i32>::with_capacity(capacity)),
+            Kind::Uuid => VarArray::new(MutableFixedSizeBinaryArray::with_capacity(16, capacity)),
             Kind::TimestampSecsZ => {
                 VarArray::new(MutablePrimitiveArray::<i64>::with_capacity(capacity))
             }
@@ -66,6 +69,7 @@ impl Kind {
             Kind::I64 => DataType::Int64,
             Kind::F64 => DataType::Float64,
             Kind::String => DataType::Utf8,
+            Kind::Uuid => DataType::FixedSizeBinary(16),
             Kind::TimestampSecsZ => DataType::Timestamp(TimeUnit::Second, None),
         }
     }
@@ -85,10 +89,15 @@ impl Kind {
 
     pub fn default_encoding(&self) -> Encoding {
         match self {
-            Kind::TimestampSecsZ | Kind::I32 | Kind::I64 => Encoding::DeltaBinaryPacked,
-            Kind::String => Encoding::DeltaLengthByteArray,
             Kind::F64 => Encoding::ByteStreamSplit,
+            // don't think there's a reasonable encoding for these
             Kind::Bool | Kind::U8 => Encoding::Plain,
+            // maybe this would practically benefit from the string encoding?
+            Kind::Uuid => Encoding::Plain,
+            // TODO: (writing with arrow2) > External format error: Invalid argument error: The datatype Int32 cannot be encoded by DeltaBinaryPacked
+            Kind::TimestampSecsZ | Kind::I64 | Kind::I32 => Encoding::Plain,
+            // TODO: (reading with datafusion) > ArrowError(ParquetError("Error reading batch from projects.parquet (size: 286037286): Parquet argument error: NYI: Encoding DELTA_LENGTH_BYTE_ARRAY is not supported"))
+            Kind::String => Encoding::Plain,
         }
     }
 }
@@ -235,6 +244,25 @@ impl Table {
             Ok(())
         } else {
             Err(anyhow!("can't push a bool to this column"))
+        }
+    }
+
+    pub fn push_fsb(&mut self, i: usize, val: Option<impl AsRef<[u8]>>) -> Result<()> {
+        let arr = &mut self.builders[i];
+        let val = match val {
+            Some(val) => val,
+            None => {
+                arr.inner.push_null();
+                return Ok(());
+            }
+        };
+
+        if let Some(arr) = arr.downcast_mut::<MutableFixedSizeBinaryArray>() {
+            self.mem_used += arr.size();
+            arr.try_push(Some(val.as_ref()))?;
+            Ok(())
+        } else {
+            Err(anyhow!("can't push a uuid to this column"))
         }
     }
 

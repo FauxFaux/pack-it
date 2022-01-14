@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use anyhow::Result;
-use log::info;
+use log::{debug, info};
 
 use crate::{Table, TableField, Writer};
 
@@ -29,8 +29,20 @@ impl<W: Write + Send + 'static> Packer<W> {
     pub fn consider_flushing(&mut self) -> Result<()> {
         self.table.check_consistent()?;
 
-        if self.table.mem_estimate() > 512 * 1024 * 1024 || self.table.rows() > 100_000 {
+        if self.table.mem_estimate() > 512 * 1024 * 1024 {
             self.flush()?;
+        } else if self.table.rows() % (64 * 1024) == 0 {
+            let before = self.table.mem_estimate();
+            self.table.finish_bulk_push()?;
+            let mem_estimate = self.table.mem_estimate();
+            let rows = self.table.rows().max(1);
+            debug!(
+                "didn't flush ({} rows, ~{}MB (est: ~{}MB), ~{}bytes/row)",
+                rows,
+                mem_estimate / 1024 / 1024,
+                before / 1024 / 1024,
+                mem_estimate / rows
+            );
         }
 
         Ok(())
