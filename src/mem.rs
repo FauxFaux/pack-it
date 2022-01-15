@@ -3,7 +3,6 @@ use arrow2::array::{
     MutableUtf8Array, Offset,
 };
 use arrow2::bitmap::MutableBitmap;
-use arrow2::buffer::MutableBuffer;
 use arrow2::types::NativeType;
 use std::mem;
 
@@ -11,7 +10,7 @@ pub trait MemUsage {
     fn mem_usage(&self) -> usize;
 }
 
-impl<T: NativeType> MemUsage for MutableBuffer<T> {
+impl<T: NativeType> MemUsage for Vec<T> {
     #[inline]
     fn mem_usage(&self) -> usize {
         self.len() * mem::size_of::<T>()

@@ -53,7 +53,7 @@ pub struct Repack {
 
 fn find_field<'f>(schema: &'f Schema, name: &str) -> Option<(usize, &'f Field)> {
     schema
-        .fields()
+        .fields
         .iter()
         .enumerate()
         .find(|(_, f)| f.name == name)
@@ -82,11 +82,12 @@ pub fn transform<W: Write + Send + 'static>(
                 Action::Drop | Action::ErrorOut => Vec::new(),
                 Action::Copy => vec![
                     try {
-                        let x = in_schema.field_with_name(&op.input)?;
+                        let (_, x) = find_field(&in_schema, &op.input)
+                            .ok_or_else(|| anyhow!("field has gone missing?"))?;
                         OutField {
                             name: x.name.to_string(),
                             data_type: x.data_type.clone(),
-                            nullable: x.nullable,
+                            nullable: x.is_nullable,
                             encoding: Encoding::Plain,
                         }
                     },

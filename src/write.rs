@@ -5,13 +5,13 @@ use std::thread::JoinHandle;
 use crate::erratum::join;
 use anyhow::{anyhow, bail, Result};
 use arrow2::array::Array;
-use arrow2::datatypes::Field as ArrowField;
+use arrow2::chunk::Chunk;
 use arrow2::datatypes::Schema;
+use arrow2::datatypes::{Field as ArrowField, Metadata};
 use arrow2::error::ArrowError;
 use arrow2::io::parquet::write::{
     to_parquet_schema, write_file, Compression, RowGroupIterator, Version, WriteOptions,
 };
-use arrow2::record_batch::RecordBatch;
 use crossbeam_channel::{SendError, Sender};
 use log::info;
 
@@ -20,26 +20,24 @@ use crate::table::TableField;
 pub struct Writer<W> {
     schema: Box<[TableField]>,
     threads: Vec<JoinHandle<Result<W>>>,
-    tx: Option<Sender<Result<RecordBatch, ArrowError>>>,
+    tx: Option<Sender<Result<Chunk<Arc<dyn Array>>, ArrowError>>>,
 }
 
 fn out_thread<W: Write + Send + 'static>(
     mut inner: W,
     schema: &[TableField],
-    rx: impl IntoIterator<Item = Result<RecordBatch, ArrowError>> + Send + 'static,
+    rx: impl IntoIterator<Item = Result<Chunk<Arc<dyn Array>>, ArrowError>> + Send + 'static,
 ) -> Result<JoinHandle<Result<W>>> {
-    let arrow_schema = Schema::new(
+    let arrow_schema = Schema::from(
         schema
             .iter()
             .map(|f| ArrowField {
                 name: f.name.to_string(),
                 data_type: f.kind.to_arrow(),
-                nullable: f.nullable,
-                dict_id: 0,
-                dict_is_ordered: false,
-                metadata: None,
+                is_nullable: f.nullable,
+                metadata: Metadata::default(),
             })
-            .collect(),
+            .collect::<Vec<_>>(),
     );
 
     let write_options = WriteOptions {
@@ -89,19 +87,14 @@ impl<W: Write + Send + 'static> Writer<W> {
     }
 
     pub fn submit_batch(&mut self, batch: impl IntoIterator<Item = Arc<dyn Array>>) -> Result<()> {
-        let result = RecordBatch::try_from_iter(
-            batch
-                .into_iter()
-                .zip(self.schema.iter())
-                .map(|(arr, stat)| (stat.name.to_string(), arr)),
-        );
+        let result = Chunk::try_new(batch.into_iter().collect())?;
 
         let tx = self
             .tx
             .as_mut()
             .ok_or_else(|| anyhow!("previously failed"))?;
 
-        if let Err(SendError(_)) = tx.send(result) {
+        if let Err(SendError(_)) = tx.send(Ok(result)) {
             // all of the writers have failed, so we need to die
             // (this doesn't catch the case where one writer has died)
             drop(self.tx.take());
