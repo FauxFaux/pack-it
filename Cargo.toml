@@ -3,6 +3,12 @@ name = "pack-it"
 version = "0.1.0"
 edition = "2021"
 
+description = "Packer for Parquet tables"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/FauxFaux/pack-it"
+authors = ["Chris West (Faux) <git@goeswhere.com>"]
+readme = "README.md"
+
 [dependencies]
 anyhow = "1"
 arrow2 = { version = "0.9", features = ["io_parquet", "io_parquet_compression"] }
