@@ -89,13 +89,14 @@ impl Kind {
 
     pub fn default_encoding(&self) -> Encoding {
         match self {
-            Kind::F64 => Encoding::ByteStreamSplit,
             // don't think there's a reasonable encoding for these
             Kind::Bool | Kind::U8 => Encoding::Plain,
             // maybe this would practically benefit from the string encoding?
             Kind::Uuid => Encoding::Plain,
             // TODO: (writing with arrow2) > External format error: Invalid argument error: The datatype Int32 cannot be encoded by DeltaBinaryPacked
             Kind::TimestampSecsZ | Kind::I64 | Kind::I32 => Encoding::Plain,
+            // TODO: Error: External format error: Invalid argument error: The datatype Float64 cannot be encoded by ByteStreamSplit
+            Kind::F64 => Encoding::Plain,
             // TODO: (reading with datafusion) > ArrowError(ParquetError("Error reading batch from projects.parquet (size: 286037286): Parquet argument error: NYI: Encoding DELTA_LENGTH_BYTE_ARRAY is not supported"))
             Kind::String => Encoding::Plain,
         }
