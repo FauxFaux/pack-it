@@ -48,7 +48,7 @@ impl<W: Write + Send + 'static> Packer<W> {
         Ok(())
     }
 
-    fn flush(&mut self) -> Result<()> {
+    pub fn flush(&mut self) -> Result<()> {
         let rows = self.table.rows();
         if 0 == rows {
             return Ok(());
