@@ -10,7 +10,7 @@ use arrow2::datatypes::Schema;
 use arrow2::datatypes::{Field as ArrowField, Metadata};
 use arrow2::error::ArrowError;
 use arrow2::io::parquet::write::{
-    to_parquet_schema, write_file, Compression, RowGroupIterator, Version, WriteOptions,
+    Compression, FileWriter, RowGroupIterator, Version, WriteOptions,
 };
 use crossbeam_channel::{SendError, Sender};
 use log::info;
@@ -46,17 +46,19 @@ fn out_thread<W: Write + Send + 'static>(
         version: Version::V2,
     };
     let encodings = schema.iter().map(|f| f.encoding).collect();
-    let parquet_schema = to_parquet_schema(&arrow_schema)?;
 
     Ok(std::thread::spawn(move || -> Result<W> {
-        write_file(
-            &mut inner,
-            RowGroupIterator::try_new(rx.into_iter(), &arrow_schema, write_options, encodings)?,
-            &arrow_schema,
-            parquet_schema,
-            write_options,
-            None,
-        )?;
+        let rg_iter =
+            RowGroupIterator::try_new(rx.into_iter(), &arrow_schema, write_options, encodings)?;
+        let mut writer = FileWriter::try_new(&mut inner, arrow_schema, write_options)?;
+        writer.start()?;
+
+        for rg in rg_iter {
+            let (row_group, num_rows) = rg?;
+            writer.write(row_group, num_rows)?;
+        }
+
+        writer.end(None)?;
         Ok(inner)
     }))
 }

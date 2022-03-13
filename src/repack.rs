@@ -1,4 +1,5 @@
 use std::io::{Read, Seek, Write};
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use arrow2::array::{
@@ -31,7 +32,7 @@ pub struct OutField {
 
 pub struct Split {
     pub output: Vec<OutField>,
-    pub func: Box<dyn Send + FnMut(Box<dyn Array>, &mut [&mut VarArray]) -> Result<()>>,
+    pub func: Box<dyn Send + FnMut(Arc<dyn Array>, &mut [&mut VarArray]) -> Result<()>>,
 }
 
 pub enum Action {
@@ -72,7 +73,7 @@ pub fn transform<W: Write + Send + 'static>(
     mut rg_filter: impl FnMut(usize, &RowGroupMetaData) -> LoopDecision,
 ) -> Result<W> {
     let metadata = read::read_metadata(&mut f)?;
-    let in_schema = read::get_schema(&metadata)?;
+    let in_schema = read::infer_schema(&metadata)?;
 
     let out_schema = repack
         .ops
@@ -129,11 +130,19 @@ pub fn transform<W: Write + Send + 'static>(
         };
 
         for op in &mut repack.ops {
-            let (field, field_meta) = find_field(&in_schema, &op.input)
+            let (_field, field_meta) = find_field(&in_schema, &op.input)
                 .ok_or_else(|| anyhow!("looking up input field {:?}", op.input))?;
-            let col = read::get_column_iterator(&mut f, &metadata, rg, field, None, Vec::new());
-            // these _ are the returned cache buffers
-            let (arr, _, _) = read::column_iter_to_array(col, field_meta, Vec::new())?;
+            let col = read::read_columns(&mut f, rg_meta.columns(), &field_meta.name)?;
+            let des = read::to_deserializer(
+                col,
+                field_meta.clone(),
+                rg_meta
+                    .num_rows()
+                    .try_into()
+                    .expect("row count fits in memory"),
+                None,
+            )?;
+            let arr = Arc::clone(&des.collect::<Result<Vec<_>, _>>()?[0]);
 
             match &mut op.action {
                 Action::ErrorOut => bail!("asked to error out after loading {:?}", field_meta.name),
