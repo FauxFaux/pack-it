@@ -1,7 +1,7 @@
 use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use arrow2::array::{
     Array, BooleanArray, MutableBooleanArray, MutablePrimitiveArray, MutableUtf8Array,
     PrimitiveArray, TryExtend, Utf8Array,
@@ -52,7 +52,8 @@ pub struct Repack {
     pub ops: Vec<Op>,
 }
 
-fn find_field<'f>(schema: &'f Schema, name: &str) -> Option<(usize, &'f Field)> {
+#[inline]
+pub fn find_field<'f>(schema: &'f Schema, name: &str) -> Option<(usize, &'f Field)> {
     schema
         .fields
         .iter()
@@ -64,6 +65,31 @@ pub enum LoopDecision {
     Include,
     Skip,
     Break,
+}
+
+pub fn read_single_column(
+    mut f: impl Read + Seek,
+    rg_meta: &RowGroupMetaData,
+    field_meta: Field,
+) -> Result<Arc<dyn Array>> {
+    let name = field_meta.name.to_string();
+    let col = read::read_columns(&mut f, rg_meta.columns(), &name)?;
+    let mut des = read::to_deserializer(
+        col,
+        field_meta,
+        rg_meta
+            .num_rows()
+            .try_into()
+            .expect("row count fits in memory"),
+        None,
+    )?;
+
+    let ret = des
+        .next()
+        .ok_or_else(|| anyhow!("expected at least one column"))??;
+    ensure!(des.next().is_none(), "expected exactly one column");
+
+    Ok(ret)
 }
 
 pub fn transform<W: Write + Send + 'static>(
@@ -132,17 +158,8 @@ pub fn transform<W: Write + Send + 'static>(
         for op in &mut repack.ops {
             let (_field, field_meta) = find_field(&in_schema, &op.input)
                 .ok_or_else(|| anyhow!("looking up input field {:?}", op.input))?;
-            let col = read::read_columns(&mut f, rg_meta.columns(), &field_meta.name)?;
-            let des = read::to_deserializer(
-                col,
-                field_meta.clone(),
-                rg_meta
-                    .num_rows()
-                    .try_into()
-                    .expect("row count fits in memory"),
-                None,
-            )?;
-            let arr = Arc::clone(&des.collect::<Result<Vec<_>, _>>()?[0]);
+
+            let arr = read_single_column(&mut f, rg_meta, field_meta.clone())?;
 
             match &mut op.action {
                 Action::ErrorOut => bail!("asked to error out after loading {:?}", field_meta.name),
