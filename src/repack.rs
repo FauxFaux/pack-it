@@ -1,5 +1,4 @@
 use std::io::{Read, Seek, Write};
-use std::sync::Arc;
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use arrow2::array::{
@@ -32,7 +31,7 @@ pub struct OutField {
 
 pub struct Split {
     pub output: Vec<OutField>,
-    pub func: Box<dyn Send + FnMut(Arc<dyn Array>, &mut [&mut VarArray]) -> Result<()>>,
+    pub func: Box<dyn Send + FnMut(Box<dyn Array>, &mut [&mut VarArray]) -> Result<()>>,
 }
 
 pub enum Action {
@@ -71,7 +70,7 @@ pub fn read_single_column(
     mut f: impl Read + Seek,
     rg_meta: &RowGroupMetaData,
     field_meta: Field,
-) -> Result<Arc<dyn Array>> {
+) -> Result<Box<dyn Array>> {
     let name = field_meta.name.to_string();
     let col = read::read_columns(&mut f, rg_meta.columns(), &name)?;
     let mut des = read::to_deserializer(
