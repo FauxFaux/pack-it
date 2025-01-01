@@ -8,7 +8,7 @@ use arrow2::array::Array;
 use arrow2::chunk::Chunk;
 use arrow2::datatypes::Schema;
 use arrow2::datatypes::{Field as ArrowField, Metadata};
-use arrow2::error::ArrowError;
+use arrow2::error::Error as ArrowError;
 use arrow2::io::parquet::write::{
     CompressionOptions, FileWriter, RowGroupIterator, Version, WriteOptions,
 };
@@ -45,13 +45,12 @@ fn out_thread<W: Write + Send + 'static>(
         compression: CompressionOptions::Zstd(None),
         version: Version::V2,
     };
-    let encodings = schema.iter().map(|f| f.encoding).collect();
+    let encodings = schema.iter().map(|f| vec![f.encoding]).collect();
 
     Ok(std::thread::spawn(move || -> Result<W> {
         let rg_iter =
             RowGroupIterator::try_new(rx.into_iter(), &arrow_schema, write_options, encodings)?;
         let mut writer = FileWriter::try_new(&mut inner, arrow_schema, write_options)?;
-        writer.start()?;
 
         for rg in rg_iter {
             let row_group = rg?;
