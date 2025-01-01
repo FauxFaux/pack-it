@@ -1,10 +1,12 @@
 use arrow2::array::{
     MutableArray, MutableBooleanArray, MutableFixedSizeBinaryArray, MutablePrimitiveArray,
-    MutableUtf8Array, Offset,
+    MutableUtf8Array,
 };
+use arrow2::types::Offset;
 use arrow2::bitmap::MutableBitmap;
 use arrow2::types::NativeType;
 use std::mem;
+use arrow2::offset::Offsets;
 
 pub trait MemUsage {
     fn mem_usage(&self) -> usize;
@@ -38,6 +40,12 @@ impl MemUsage for MutableFixedSizeBinaryArray {
 impl<O: Offset> MemUsage for MutableUtf8Array<O> {
     fn mem_usage(&self) -> usize {
         self.validity().mem_usage() + self.values().mem_usage() + self.offsets().mem_usage()
+    }
+}
+
+impl<O: Offset> MemUsage for Offsets<O> {
+    fn mem_usage(&self) -> usize {
+        self.len() * size_of::<O>()
     }
 }
 

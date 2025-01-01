@@ -44,6 +44,7 @@ fn out_thread<W: Write + Send + 'static>(
         write_statistics: true,
         compression: CompressionOptions::Zstd(None),
         version: Version::V2,
+        data_pagesize_limit: None,
     };
     let encodings = schema.iter().map(|f| vec![f.encoding]).collect();
 
