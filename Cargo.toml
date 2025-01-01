@@ -11,6 +11,6 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1"
-arrow2 = { version = "0.16", features = ["io_parquet", "io_parquet_compression"] }
+arrow2 = { version = "0.18", features = ["io_parquet", "io_parquet_compression"] }
 crossbeam-channel = "0.5"
 log = "0.4"
