@@ -10,7 +10,7 @@ use arrow2::datatypes::Schema;
 use arrow2::datatypes::{Field as ArrowField, Metadata};
 use arrow2::error::ArrowError;
 use arrow2::io::parquet::write::{
-    Compression, FileWriter, RowGroupIterator, Version, WriteOptions,
+    CompressionOptions, FileWriter, RowGroupIterator, Version, WriteOptions,
 };
 use crossbeam_channel::{SendError, Sender};
 use log::info;
@@ -42,7 +42,7 @@ fn out_thread<W: Write + Send + 'static>(
 
     let write_options = WriteOptions {
         write_statistics: true,
-        compression: Compression::Zstd,
+        compression: CompressionOptions::Zstd(None),
         version: Version::V2,
     };
     let encodings = schema.iter().map(|f| f.encoding).collect();
@@ -54,8 +54,8 @@ fn out_thread<W: Write + Send + 'static>(
         writer.start()?;
 
         for rg in rg_iter {
-            let (row_group, num_rows) = rg?;
-            writer.write(row_group, num_rows)?;
+            let row_group = rg?;
+            writer.write(row_group)?;
         }
 
         writer.end(None)?;
