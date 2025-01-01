@@ -81,6 +81,7 @@ pub fn read_single_column(
             .try_into()
             .expect("row count fits in memory"),
         None,
+        None,
     )?;
 
     let ret = des
